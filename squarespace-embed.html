@@ -1,0 +1,75 @@
+<!-- Level Up Replays - auto-updated from GitHub -->
+<!-- Paste this whole file into a Code Block on the Level Up replays page. -->
+
+<div id="lu-replays">
+  <p id="lu-loading">Loading replays…</p>
+</div>
+
+<style>
+  #lu-replays {
+    text-align: center;
+  }
+  #lu-replays .lu-month {
+    font-weight: bold;
+    margin: 1.6em 0 0.4em;
+    font-size: 1.05em;
+  }
+  #lu-replays .lu-link {
+    display: block;
+    margin: 0.35em 0;
+    text-decoration: underline;
+  }
+</style>
+
+<script>
+(function () {
+  var REPO = "MattBia/level-up-replays"; // raw.githubusercontent.com/<REPO>/main/replays.json
+  var URL = "https://raw.githubusercontent.com/" + REPO + "/main/replays.json?v=" + Date.now();
+
+  var MONTHS = ["January","February","March","April","May","June",
+                "July","August","September","October","November","December"];
+
+  fetch(URL, { cache: "no-store" })
+    .then(function (r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    })
+    .then(function (data) {
+      var replays = data.replays.slice().sort(function (a, b) {
+        return a.date < b.date ? 1 : -1; // newest first
+      });
+
+      var container = document.getElementById("lu-replays");
+      container.innerHTML = "";
+
+      var currentGroup = "";
+      replays.forEach(function (r) {
+        // Parse as plain date parts to avoid timezone shifting
+        var parts = r.date.split("-"); // YYYY-MM-DD
+        var year = parts[0], monthIdx = parseInt(parts[1], 10) - 1, day = parseInt(parts[2], 10);
+        var groupKey = year + "-" + parts[1];
+
+        if (groupKey !== currentGroup) {
+          currentGroup = groupKey;
+          var h = document.createElement("div");
+          h.className = "lu-month";
+          h.textContent = MONTHS[monthIdx] + " " + year;
+          container.appendChild(h);
+        }
+
+        var a = document.createElement("a");
+        a.className = "lu-link";
+        a.href = r.url;
+        a.target = "_blank";
+        a.rel = "noopener";
+        a.textContent = (monthIdx + 1) + "/" + day + "/" + year;
+        container.appendChild(a);
+      });
+    })
+    .catch(function (err) {
+      document.getElementById("lu-loading").textContent =
+        "Couldn't load replays right now. Please refresh the page.";
+      console.error("LU replays load failed:", err);
+    });
+})();
+</script>

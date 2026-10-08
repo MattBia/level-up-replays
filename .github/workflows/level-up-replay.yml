@@ -1,0 +1,82 @@
+name: Level Up Replay Updater
+
+on:
+  schedule:
+    # Cron is UTC. The call runs Wednesdays 3:00-4:15 PM ET; we post at 5 PM ET.
+    # 5:00 PM ET = 21:00 UTC (EDT) or 22:00 UTC (EST). Several Wednesday slots;
+    # the script is idempotent, so extra runs are no-ops and later slots double
+    # as retries if Grain is slow to process the recording.
+    - cron: "0 21 * * 3"    # 5:00 PM EDT / 4:00 PM EST
+    - cron: "30 21 * * 3"   # 5:30 PM EDT / 4:30 PM EST
+    - cron: "0 22 * * 3"    # 6:00 PM EDT / 5:00 PM EST
+    - cron: "0 23 * * 3"    # 7:00 PM EDT / 6:00 PM EST (final attempt)
+  workflow_dispatch:        # Stream Deck button / manual run
+
+permissions:
+  contents: write
+
+jobs:
+  # A button press (workflow_dispatch) that actually posted the replay makes the
+  # scheduled slots stand down. Only *successful* manual runs count, and the
+  # updater fails a manual run that finds nothing - so a press that came too
+  # early never suppresses the schedule. 12h keeps a press the day before from
+  # counting (cron slots can fire hours late, so it's not tighter).
+  check-manual-run:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      skip: ${{ steps.guard.outputs.skip }}
+    steps:
+      - name: Skip if a manual run already posted this one
+        id: guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          cutoff=$(date -u -d '12 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+          count=$(gh api \
+            "repos/${{ github.repository }}/actions/workflows/level-up-replay.yml/runs?event=workflow_dispatch&status=success&created=%3E${cutoff}" \
+            --jq '.total_count')
+          if [ "$count" -gt 0 ]; then
+            echo "Manual run already handled this ($count since $cutoff) - skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  update:
+    needs: check-manual-run
+    if: needs.check-manual-run.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install requests
+
+      - name: Update replays.json from Grain
+        env:
+          GRAIN_API_TOKEN_V2: ${{ secrets.GRAIN_API_TOKEN_V2 }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          MANUAL: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
+          FINAL_ATTEMPT: ${{ github.event.schedule == '0 23 * * 3' && 'true' || 'false' }}
+        run: python scripts/update_replays.py
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name "level-up-bot"
+          git config user.email "actions@github.com"
+          if ! git diff --quiet replays.json; then
+            git add replays.json
+            git commit -m "Add Level Up replay for $(date +%Y-%m-%d)"
+            git push
+          else
+            echo "No changes to commit."
+          fi
