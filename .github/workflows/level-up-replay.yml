@@ -64,6 +64,7 @@ jobs:
       - name: Update replays.json from Grain
         env:
           GRAIN_API_TOKEN_V2: ${{ secrets.GRAIN_API_TOKEN_V2 }}
+          GRAIN_API_TOKEN_V2_MICHELLE: ${{ secrets.GRAIN_API_TOKEN_V2_MICHELLE }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           MANUAL: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
           FINAL_ATTEMPT: ${{ github.event.schedule == '0 23 * * 3' && 'true' || 'false' }}

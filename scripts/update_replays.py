@@ -7,7 +7,14 @@ recording in BIA's Grain workspace, grabs its share URL, and
 upserts it into replays.json (keyed by date, so re-runs are harmless).
 
 Env vars:
-  GRAIN_API_TOKEN_V2  required - same token BIA's onboarding automation uses
+  GRAIN_API_TOKEN_V2  required - Matt's personal Grain token
+  GRAIN_API_TOKEN_V2_MICHELLE
+                      optional - Michelle's personal Grain token. On Grain's
+                      Starter plan a personal token only sees recordings its
+                      owner recorded or was shared, so when Michelle's
+                      recorder captures the call (2026-10-28) Matt's token
+                      can't find it. Every configured token is queried and
+                      the results merged.
   SLACK_WEBHOOK_URL   optional - posts a note on success or final failure
   FINAL_ATTEMPT       optional - "true" on the last cron slot of the day;
                       controls whether a miss is treated as a failure
@@ -42,11 +49,14 @@ import requests
 # Grain v2 public API. Recording search is a POST with a JSON filter body;
 # this matches the contract BIA's client_onboarding.py already uses in prod.
 GRAIN_RECORDINGS_URL = "https://api.grain.com/_/public-api/v2/recordings"
-GRAIN_HEADERS = {
-    "Authorization": f"Bearer {os.environ['GRAIN_API_TOKEN_V2']}",
-    "Public-Api-Version": "2025-10-31",
-    "Content-Type": "application/json",
-}
+GRAIN_API_VERSION = "2025-10-31"
+# (label, env var). The first is required; the rest are optional extra personal
+# tokens whose owners might have recorded the call. Add a line here plus the
+# matching secret in the workflow to cover another recorder.
+GRAIN_TOKEN_ENVS = [
+    ("matt", "GRAIN_API_TOKEN_V2"),
+    ("michelle", "GRAIN_API_TOKEN_V2_MICHELLE"),
+]
 REPLAYS_PATH = Path(__file__).resolve().parent.parent / "replays.json"
 # Real Grain title is "Level Up with Matt". The server-side search narrows the
 # list; the local check requires the phrase "level up" (whitespace-normalised,
@@ -111,16 +121,62 @@ def title_matches(title: str | None) -> bool:
     return TITLE_PHRASE in t
 
 
+def grain_tokens() -> list[tuple[str, str]]:
+    """Configured (label, token) pairs. The first env var is required."""
+    tokens = []
+    for label, env in GRAIN_TOKEN_ENVS:
+        raw = os.environ.get(env, "").strip()
+        if raw:
+            tokens.append((label, raw))
+        elif env == GRAIN_TOKEN_ENVS[0][1]:
+            raise RuntimeError(f"{env} is not set")
+        else:
+            print(f"No {env} set; not checking {label}'s recordings.")
+    return tokens
+
+
+def list_recordings() -> list[dict]:
+    """
+    Union of the title-search results across every configured token, deduped
+    by recording id. A token that Grain rejects (expired, revoked) is reported
+    and skipped as long as at least one token worked; if none work, the last
+    error is raised so the run fails loudly.
+    """
+    seen: dict[str, dict] = {}
+    worked = 0
+    last_error: Exception | None = None
+    for label, token in grain_tokens():
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Public-Api-Version": GRAIN_API_VERSION,
+            "Content-Type": "application/json",
+        }
+        try:
+            resp = requests.post(
+                GRAIN_RECORDINGS_URL,
+                headers=headers,
+                json={"filter": {"title_search": GRAIN_TITLE_SEARCH}},
+                timeout=30,
+            )
+            resp.raise_for_status()
+        except requests.RequestException as e:
+            print(f"Grain query with {label}'s token failed: {e}", file=sys.stderr)
+            last_error = e
+            continue
+        worked += 1
+        recs = resp.json().get("recordings", [])
+        print(f"{label}'s token sees {len(recs)} '{GRAIN_TITLE_SEARCH}' recording(s).")
+        for r in recs:
+            key = str(r.get("id") or r.get("recording_url") or id(r))
+            seen.setdefault(key, r)
+    if not worked and last_error is not None:
+        raise last_error
+    return list(seen.values())
+
+
 def fetch_call(start: date, end: date) -> dict | None:
     """Return the newest matching Grain recording dated start..end (ET), or None."""
-    resp = requests.post(
-        GRAIN_RECORDINGS_URL,
-        headers=GRAIN_HEADERS,
-        json={"filter": {"title_search": GRAIN_TITLE_SEARCH}},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    recordings = resp.json().get("recordings", [])
+    recordings = list_recordings()
 
     lo, hi = start.isoformat(), end.isoformat()
     matches = []
@@ -207,7 +263,8 @@ def main() -> int:
             notify_slack(
                 f":x: {CALL_NAME} replay was NOT posted for {label} - "
                 "no matching recording found in Grain by the last check. "
-                "Check the recording title contains 'Level Up', or add the link manually."
+                "Check the recording title contains 'Level Up', that whoever recorded it "
+                "has a token configured (GRAIN_API_TOKEN_V2 / _MICHELLE), or add the link manually."
             )
             result(f"NOT posted for {label} - no recording found by the final check.")
             return 1

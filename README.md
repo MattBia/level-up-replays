@@ -47,13 +47,26 @@ Repo lives at **https://github.com/MattBia/level-up-replays** (public, so the
 Squarespace fetch works). Steps that need Matt:
 
 1. Repo → Settings → Secrets and variables → Actions → New repository secret:
-   - `GRAIN_API_TOKEN_V2` — the same value as in `track-thrive-replays`. **Required.**
+   - `GRAIN_API_TOKEN_V2` — Matt's personal Grain token. **Required.**
+   - `GRAIN_API_TOKEN_V2_MICHELLE` — Michelle's personal Grain token. Optional but
+     needed whenever Michelle's recorder captures the call (see below).
    - `SLACK_WEBHOOK_URL` — same value as in `track-thrive-replays`. Optional.
 2. Create the Squarespace page (suggested slug `/lu-replays`), add a Code Block, and
    paste the whole of `squarespace-embed.html`. If a different slug is used, update
    `PAGE_URL` in `scripts/update_replays.py` so Slack notes point at the right page.
 3. Test: Actions tab → "Level Up Replay Updater" → Run workflow. Expected
    today: "already on the page and Grain has nothing newer".
+
+### Whose recorder joined the call?
+
+A personal token only sees recordings its owner recorded or was shared, so the
+script queries every configured token and merges the results. On 2026-10-28 the
+call was recorded by Michelle's recorder and Matt's token couldn't see it, which is
+why `GRAIN_API_TOKEN_V2_MICHELLE` exists. To add it: Michelle creates a personal
+token (Account settings → Integrations → Personal API), then
+`gh secret set GRAIN_API_TOKEN_V2_MICHELLE` in this repo. To cover another
+recorder, add a line to `GRAIN_TOKEN_ENVS` in the script and the matching
+`secrets.` line in the workflow.
 
 ### Token visibility check
 
